@@ -133,8 +133,8 @@ for i, country in enumerate(selected_countries):
     col = cols[i % len(cols)]
 
     with col:
-        first_gdp = first_year[gdp_df['Country Code'] == country]['GDP'].iat[0] / 1000000000
-        last_gdp = last_year[gdp_df['Country Code'] == country]['GDP'].iat[0] / 1000000000
+        first_gdp = first_year[first_year['Country Code'] == country]['GDP'].iat[0] / 1000000000
+        last_gdp = last_year[last_year['Country Code'] == country]['GDP'].iat[0] / 1000000000
 
         if math.isnan(first_gdp):
             growth = 'n/a'
