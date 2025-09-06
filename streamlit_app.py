@@ -1,151 +1,68 @@
 import streamlit as st
+import ee
+import geemap.foliumap as geemap
 import pandas as pd
-import math
-from pathlib import Path
+import datetime
 
-# Set the title and favicon that appear in the Browser's tab bar.
-st.set_page_config(
-    page_title='GDP dashboard',
-    page_icon=':earth_americas:', # This is an emoji shortcode. Could be a URL too.
-)
+# Inicializar Earth Engine
+try:
+    ee.Initialize()
+except Exception:
+    ee.Authenticate()
+    ee.Initialize()
 
-# -----------------------------------------------------------------------------
-# Declare some useful functions.
+st.set_page_config(layout="wide")
+st.title("🌍 Monitoramento da Qualidade do Ar - Hortolândia")
 
-@st.cache_data
-def get_gdp_data():
-    """Grab GDP data from a CSV file.
+# Filtros na barra lateral
+start_date = st.sidebar.date_input("Data início", value=datetime.date(2025, 9, 1))
+end_date = st.sidebar.date_input("Data fim", value=datetime.date(2025, 9, 5))
+sd = pd.to_datetime(start_date).strftime("%Y-%m-%d")
+ed = pd.to_datetime(end_date).strftime("%Y-%m-%d")
 
-    This uses caching to avoid having to read the file every time. If we were
-    reading from an HTTP endpoint instead of a file, it's a good idea to set
-    a maximum age to the cache with the TTL argument: @st.cache_data(ttl='1d')
-    """
+pollutant = st.sidebar.selectbox("Selecione o poluente", ["NO2", "O3", "CO"])
 
-    # Instead of a CSV on disk, you could read from an HTTP endpoint here too.
-    DATA_FILENAME = Path(__file__).parent/'data/gdp_data.csv'
-    raw_gdp_df = pd.read_csv(DATA_FILENAME)
+# Região de Hortolândia
+roi = ee.Geometry.Point([-47.2191, -22.8583]).buffer(20000)
 
-    MIN_YEAR = 1960
-    MAX_YEAR = 2022
+# Coleções do Sentinel-5P
+collections = {
+    "NO2": "COPERNICUS/S5P/OFFL/L3_NO2",
+    "O3": "COPERNICUS/S5P/OFFL/L3_O3",
+    "CO": "COPERNICUS/S5P/OFFL/L3_CO"
+}
+band_map = {
+    "NO2": "NO2_column_number_density",
+    "O3": "O3_column_number_density",
+    "CO": "CO_column_number_density"
+}
 
-    # The data above has columns like:
-    # - Country Name
-    # - Country Code
-    # - [Stuff I don't care about]
-    # - GDP for 1960
-    # - GDP for 1961
-    # - GDP for 1962
-    # - ...
-    # - GDP for 2022
-    #
-    # ...but I want this instead:
-    # - Country Name
-    # - Country Code
-    # - Year
-    # - GDP
-    #
-    # So let's pivot all those year-columns into two: Year and GDP
-    gdp_df = raw_gdp_df.melt(
-        ['Country Code'],
-        [str(x) for x in range(MIN_YEAR, MAX_YEAR + 1)],
-        'Year',
-        'GDP',
-    )
+col = ee.ImageCollection(collections[pollutant]).select(band_map[pollutant])
+col = col.filterDate(sd, ed).filterBounds(roi)
+image = col.mean()
 
-    # Convert years from string to integers
-    gdp_df['Year'] = pd.to_numeric(gdp_df['Year'])
+# Cores no mapa
+vis_params = {
+    "NO2": {"min": 0, "max": 0.0002, "palette": ["white", "yellow", "red"]},
+    "O3": {"min": 0.12, "max": 0.15, "palette": ["blue", "green", "red"]},
+    "CO": {"min": 0, "max": 0.05, "palette": ["white", "orange", "red"]}
+}
 
-    return gdp_df
+# Criar mapa
+Map = geemap.Map(center=[-22.8583, -47.2191], zoom=10)
+Map.addLayer(image, vis_params[pollutant], pollutant)
+Map.addLayer(roi, {"color": "black"}, "Hortolândia")
+Map.add_colorbar(vis_params[pollutant], label=pollutant, layer_name=pollutant)
+Map.to_streamlit(height=600)
 
-gdp_df = get_gdp_data()
+# Estatísticas
+mean_dict = image.reduceRegion(
+    reducer=ee.Reducer.mean(),
+    geometry=roi,
+    scale=1000,
+    bestEffort=True
+).getInfo()
 
-# -----------------------------------------------------------------------------
-# Draw the actual page
+st.subheader("📊 Estatísticas médias na região de Hortolândia")
+st.write(mean_dict)
 
-# Set the title that appears at the top of the page.
-'''
-# :earth_americas: GDP dashboard
-
-Browse GDP data from the [World Bank Open Data](https://data.worldbank.org/) website. As you'll
-notice, the data only goes to 2022 right now, and datapoints for certain years are often missing.
-But it's otherwise a great (and did I mention _free_?) source of data.
-'''
-
-# Add some spacing
-''
-''
-
-min_value = gdp_df['Year'].min()
-max_value = gdp_df['Year'].max()
-
-from_year, to_year = st.slider(
-    'Which years are you interested in?',
-    min_value=min_value,
-    max_value=max_value,
-    value=[min_value, max_value])
-
-countries = gdp_df['Country Code'].unique()
-
-if not len(countries):
-    st.warning("Select at least one country")
-
-selected_countries = st.multiselect(
-    'Which countries would you like to view?',
-    countries,
-    ['DEU', 'FRA', 'GBR', 'BRA', 'MEX', 'JPN'])
-
-''
-''
-''
-
-# Filter the data
-filtered_gdp_df = gdp_df[
-    (gdp_df['Country Code'].isin(selected_countries))
-    & (gdp_df['Year'] <= to_year)
-    & (from_year <= gdp_df['Year'])
-]
-
-st.header('GDP over time', divider='gray')
-
-''
-
-st.line_chart(
-    filtered_gdp_df,
-    x='Year',
-    y='GDP',
-    color='Country Code',
-)
-
-''
-''
-
-
-first_year = gdp_df[gdp_df['Year'] == from_year]
-last_year = gdp_df[gdp_df['Year'] == to_year]
-
-st.header(f'GDP in {to_year}', divider='gray')
-
-''
-
-cols = st.columns(4)
-
-for i, country in enumerate(selected_countries):
-    col = cols[i % len(cols)]
-
-    with col:
-        first_gdp = first_year[first_year['Country Code'] == country]['GDP'].iat[0] / 1000000000
-        last_gdp = last_year[last_year['Country Code'] == country]['GDP'].iat[0] / 1000000000
-
-        if math.isnan(first_gdp):
-            growth = 'n/a'
-            delta_color = 'off'
-        else:
-            growth = f'{last_gdp / first_gdp:,.2f}x'
-            delta_color = 'normal'
-
-        st.metric(
-            label=f'{country} GDP',
-            value=f'{last_gdp:,.0f}B',
-            delta=growth,
-            delta_color=delta_color
-        )
