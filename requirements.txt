@@ -1,2 +1,7 @@
-streamlit
+streamlit==1.32.0
 pandas
+openpyxl
+python-docx
+PyMuPDF
+plotly
+pillow
